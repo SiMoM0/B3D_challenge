@@ -1,0 +1,13 @@
+# logs
+logs/
+log/
+
+# pycache
+__pycache__/
+*.pyc
+
+# dataset
+Building3D_entry_level/
+
+# stuff
+.idea/
