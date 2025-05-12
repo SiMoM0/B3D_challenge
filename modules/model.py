@@ -67,10 +67,14 @@ class Embedding(nn.Module):
         return self.final(torch.cat((point_emb, neigh_emb), dim=1))
     
 class Modellone(nn.Module):
-    def __init__(self, channels_in, channels_out):
+    def __init__(self, channels_in, channels_out, big=True):
         super().__init__()
 
+        self.big = big
+
         self.embedding = Embedding(channels_in, channels_out)
+        if self.big:
+            self.embedding2 = Embedding(channels_out, channels_out)
         self.class_head = nn.Conv1d(channels_out, 2, 1)
         self.regression_head = nn.Conv1d(channels_out, 3, 1)
 
@@ -78,6 +82,9 @@ class Modellone(nn.Module):
         """x: B x C_in x N. neighbors: B x K x N. Output: B x C_out x N"""
         # Embedding
         x = self.embedding(x, neighbors)
+
+        if self.big:
+            x =  self.embedding2(x, neighbors)
 
         # Classification
         class_out = self.class_head(x).squeeze(1)

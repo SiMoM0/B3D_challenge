@@ -126,11 +126,11 @@ def main(dataset_config):
         # colors = np.concatenate((colors, np.ones((len(wf_vertices), 3))), axis=0)
 
         if GT:
-            dists = torch.cdist(torch.tensor(pc[:, :3]), torch.tensor(wf_vertices[:, :3])).numpy()
-            dists = np.min(dists, axis=1)
-            labels = (dists < 0.08) # threshold
-            # colors = np.ones((len(pc), 3))
-            colors[labels] = [1, 0, 0]  # red
+            class_labels = batch['class_label'][0].numpy()
+            class_labels = class_labels.astype(bool)
+            colors[class_labels] = [1, 0, 0]  # red
+
+        print(f'Point cloud {scan_idx} | size {len(pc)} | vertices {len(wf_vertices)} | candidates {class_labels.sum()}')
 
         markers1.set_data(pc, edge_color=colors, face_color=colors, size=POINT_SIZE)
         markers2.set_data(wf_vertices, edge_color='white', face_color='white', size=POINT_SIZE)

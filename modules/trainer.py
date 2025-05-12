@@ -1,23 +1,24 @@
-import yaml
 import numpy as np
 from tqdm import tqdm
-from easydict import EasyDict
 import torch
 import torch.nn as nn
 import torch.backends.cuda as cudnn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from scipy.spatial import cKDTree as KDTree
-
+import matplotlib.pyplot as plt
 
 from modules.model import Modellone
+from utils.avgmeter import AverageMeter
 
 from torch.utils.data import DataLoader
 from Building3D.datasets import build_dataset
 
 ###### PARAMETERS ######
-EPOCHS = 10
+EPOCHS = 20
+BATCH_SIZE = 32
+HIDDEN_DIM = 128
+SHOW_SAMPLE = False
 ##########################
 
 class Trainer():
@@ -38,11 +39,11 @@ class Trainer():
         building3d_dataset = build_dataset(dataset_config.Building3D)
 
         # create dataloader
-        self.train_loader = DataLoader(building3d_dataset['train'], batch_size=1, shuffle=False, drop_last=True, num_workers=4, collate_fn=building3d_dataset['train'].collate_batch)
+        self.train_loader = DataLoader(building3d_dataset['train'], batch_size=BATCH_SIZE, shuffle=False, drop_last=True, num_workers=4, collate_fn=building3d_dataset['train'].collate_batch)
         print('Dataset size: ', len(self.train_loader.dataset))
 
         # import model
-        self.model = Modellone(channels_in=6, channels_out=64)
+        self.model = Modellone(channels_in=3, channels_out=HIDDEN_DIM, big=True)
 
         # count number of parameters
         print('Total params: ', sum(p.numel() for p in self.model.parameters()))
@@ -68,7 +69,8 @@ class Trainer():
             self.model.cuda()
 
         # loss
-        self.ce_loss = nn.CrossEntropyLoss().to(self.device)
+        weights = torch.tensor([0.1, 0.9]).float()
+        self.ce_loss = nn.CrossEntropyLoss(weight=weights).to(self.device)
         self.mse_loss = nn.MSELoss().to(self.device)
         # loss as dataparallel
         if self.n_gpus > 1:
@@ -77,7 +79,7 @@ class Trainer():
 
         # optimizer
         self.optimizer = torch.optim.SGD(self.model.parameters(),
-                                         lr=1e-3,
+                                         lr=1e-2,
                                          momentum=0.9,
                                          weight_decay=5e-4)
         
@@ -86,15 +88,26 @@ class Trainer():
 
     def train(self):
 
+        best_tp = 0.0
+
         # train for n epochs
         for epoch in range(EPOCHS):
             # train for one epoch
-            closs, rloss = self.train_epoch(train_loader=self.train_loader,
+            loss, closs, rloss, tp, acc = self.train_epoch(train_loader=self.train_loader,
                                             model=self.model,
                                             epoch=epoch)
             
             #print info
-            print(f"Epoch: [{epoch+1}/{EPOCHS}] CE Loss: {closs:.4f} | R Loss: {rloss:.4f}")
+            print(f"\nEpoch: [{epoch+1}/{EPOCHS}] Loss: {loss:.4f} | TP: {tp:.4f} | Acc: {acc:.4f}\n")
+
+            if tp > best_tp:
+                best_tp = tp
+                # save model
+                if self.n_gpus > 1:
+                    torch.save(self.model.module.state_dict(), self.logdir + '/best_train.pth')
+                else:
+                    torch.save(self.model.state_dict(), self.logdir + '/best_train.pth')
+                print(f"Model saved at epoch {epoch} with tp {tp:.4f}")
             
             # TODO: evaluate on validation set
                 
@@ -104,68 +117,86 @@ class Trainer():
         if self.gpu:
             torch.cuda.empty_cache()
 
-        loss = 0
+        running_loss = AverageMeter()
+        running_closs = AverageMeter()
+        running_rloss = AverageMeter()
+        running_tp = AverageMeter()
+        running_acc = AverageMeter()
 
         # switch to train mode
         model.train()
         
-        for i, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
+        for i, batch in enumerate(train_loader):
+        #for i, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
             pc = batch['point_clouds'].cuda()
             vertices = batch['wf_vertices'].cuda()
             edges = batch['wf_edges'].cuda()
-
-            # compute neighbors (TODO: move in dataloader)
-            kdtree = KDTree(pc.cpu().numpy()[0, :, :3])
-            _, neighbors_emb = kdtree.query(pc.cpu().numpy()[0, :, :3], k=10)
-            neighbors_emb = torch.from_numpy(neighbors_emb).cuda().view(1, -1, 10)
-
-            # compute labels for each point
-            label = torch.zeros(pc.shape[1], dtype=torch.long).cuda()
-            distances = torch.cdist(pc[:, :, :3], vertices[:, :, :3])
-            distances = distances.min(dim=2)[0]  # shape (1, N), values in [0, 1]
-            label = (distances < 0.1).long()  # shape (1, N), values in {0, 1}
-            label = label.cuda().view(1, -1)
+            neighbors_emb = batch['neighbors_emb'].cuda()
+            class_labels = batch['class_label'].cuda()
+            off_labels = batch['offset'].cuda()
 
             pc = pc.permute(0, 2, 1)  # shape (B, C, N)
             neighbors_emb = neighbors_emb.permute(0, 2, 1)  # shape (B, K, N)
 
             # compute output
-            output, offset = model(pc[:, :6], neighbors_emb)
+            output, offset = model(pc[:, :3], neighbors_emb)
+
+            preds = output.argmax(dim=1)  # shape (B, N)
 
             # compute loss
-            loss = self.ce_loss(output, label)
-            # TODO: regression loss
+            class_loss = self.ce_loss(output, class_labels)
+            offset_loss = self.mse_loss(offset, off_labels)
 
-            loss = loss
+            train_loss = class_loss + offset_loss
 
             # compute gradient and do optimizer step
             self.optimizer.zero_grad()
             if self.n_gpus > 1:
                 idx = torch.ones(self.n_gpus).cuda()
-                loss.backward(idx)
+                train_loss.backward(idx)
             else:
-                loss.backward()
+                train_loss.backward()
             
             # optimizer and scheduler step
             self.optimizer.step()
             #self.scheduler.step()
 
             # measure accuracy and record loss
-            loss = loss.mean()
-
-            #print(f"Batch: [{i+1}/{len(train_loader)}] Loss: {loss:.4f}")
+            train_loss = train_loss.mean()
+            # candidate vertices accuracy (from TP)
+            tp = (preds == 1) & (class_labels == 1)
+            tp = tp.sum().float() / class_labels.sum().float()
+            acc = (preds == class_labels).sum().float() / preds.numel()
 
             # update loss
-            loss += (loss.item() / pc.shape[0])
+            running_loss.update(train_loss.item(), pc.shape[0])
+            running_closs.update(class_loss.item(), pc.shape[0])
+            running_rloss.update(offset_loss.item(), pc.shape[0])
+            # update tp = class 1 accuracy
+            running_tp.update(tp.item(), pc.shape[0])
+            running_acc.update(acc.item(), pc.shape[0])
 
-            if i % 100 == 0:
-                print(f"Batch: [{i+1}/{len(train_loader)}] Loss: {loss:.4f}")
+            if i % 50 == 0:
+                print(f"Batch: [{i+1}/{len(train_loader)}] CE Loss: {running_closs.avg:.4f} | R Loss: {running_rloss.avg:.4f} | Total Loss: {running_loss.avg:.4f} | TP: {running_tp.avg:.4f} | Acc: {running_acc.avg:.4f}")
+                #print(f"Number of predicted vertices for last sample: {preds.sum()}/{class_labels.sum()}")
+
+            if i % 50 == 0 and SHOW_SAMPLE:
+                # plot the two point clouds with matplotlib
+                colors = np.where(preds[0, :, None].cpu().numpy() == 0, [0, 0, 0], [1, 0, 0])
+                fig = plt.figure()
+                ax = fig.add_subplot(111, projection='3d')
+                ax.scatter(pc[0, 0, :].cpu().numpy(), pc[0, 1, :].cpu().detach().numpy(), pc[0, 2, :].cpu().detach().numpy(), c=colors, s=2)
+                plt.title(f"Batch: [{i+1}/{len(train_loader)}]")
+                plt.show()
+                
 
             # write to tensorboard
             header = 'Train/'
-            self.writer_train.add_scalar(header + 'CE Loss', loss, i + len(train_loader) * epoch)
-            # self.writer_train.add_scalar(header + 'Accuracy', acc.avg, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'CE Loss', class_loss, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'R Loss', offset_loss, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'TP', tp, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'Acc', acc, i + len(train_loader) * epoch)
             # self.writer_train.add_scalar(header + 'IoU', iou.avg, i + len(train_loader) * epoch)
             # self.writer_train.add_scalar(header + 'Learning Rate', scheduler.get_lr()[0], i + len(train_loader) * epoch)
 
-        return loss, 0
+        return running_loss.avg, running_closs.avg, running_rloss.avg, running_tp.avg, running_acc.avg

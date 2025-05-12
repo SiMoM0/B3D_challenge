@@ -14,6 +14,11 @@ import torch
 from torch.utils.data import Dataset
 from collections import defaultdict
 
+from scipy.spatial import cKDTree as KDTree
+from scipy.spatial.distance import cdist
+
+NUM_NEIGHBORS = 10
+NUM_CANDIDATES = 4
 
 def load_wireframe(wireframe_file):
     vertices = []
@@ -132,6 +137,26 @@ class Building3DReconstructionDataset(Dataset):
         if self.num_points:
             point_cloud = random_sampling(point_cloud, self.num_points)
 
+        # neighbor search
+        kdtree = KDTree(point_cloud[:, 0:3])
+        _, neighbors_emb = kdtree.query(point_cloud[:, 0:3], k=NUM_NEIGHBORS)
+
+        # class labels generation
+        _, cand_vertices = kdtree.query(wf_vertices[:, 0:3], k=NUM_CANDIDATES)
+        cand_vertices = cand_vertices.reshape(-1)
+        assert len(cand_vertices) == NUM_CANDIDATES * wf_vertices.shape[0], \
+            f"cand_vertices: {len(cand_vertices)}, NUM_CANDIDATES: {NUM_CANDIDATES}, wf_vertices: {wf_vertices.shape[0]}"
+        class_labels = np.zeros((point_cloud.shape[0],), dtype=np.int64)
+        class_labels[cand_vertices] = 1
+
+        # label generation
+        org_distances = cdist(point_cloud[:, :3], wf_vertices[:, :3]) # shape (N, M)
+        # old class labels generation using fixed radius
+        # distances = np.min(org_distances, axis=1)  # shape (N, ), values in [0, 1]
+        # class_labels = (distances < 0.1).astype(np.int64)  # shape (N, ), values in {0, 1}
+        closest_idx = np.argmin(org_distances, axis=1)  # shape (N, ), values in [0, M)
+        offsets = point_cloud[:, 0:3] - wf_vertices[closest_idx, 0:3]  # shape (N, 3)
+
         if self.augment:
             if np.random.random() > 0.5:
                 # Flipping along the YZ plane
@@ -165,6 +190,9 @@ class Building3DReconstructionDataset(Dataset):
         ret_dict['wf_centers'] = wf_centers.astype(np.float32)
         ret_dict['wf_edge_number'] = wf_edge_number
         ret_dict['wf_edges_vertices'] = wf_edges_vertices.reshape((-1, 6)).astype(np.float32)
+        ret_dict['neighbors_emb'] = neighbors_emb.astype(np.int64)
+        ret_dict['class_label'] = class_labels.astype(np.int64)
+        ret_dict['offset'] = offsets.astype(np.float32)
         if self.normalize:
             ret_dict['centroid'] = centroid
             ret_dict['max_distance'] = max_distance
