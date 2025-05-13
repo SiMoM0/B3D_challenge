@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 from modules.model import Modellone
 from utils.avgmeter import AverageMeter
+from utils.focal_loss import FocalLoss
 
 from torch.utils.data import DataLoader
 from Building3D.datasets import build_dataset
@@ -69,8 +70,9 @@ class Trainer():
             self.model.cuda()
 
         # loss
-        weights = torch.tensor([0.1, 0.9]).float()
+        weights = torch.tensor([0.01, 0.99]).float()
         self.ce_loss = nn.CrossEntropyLoss(weight=weights).to(self.device)
+        #self.ce_loss = FocalLoss(alpha=weights, gamma=2).to(self.device)
         self.mse_loss = nn.MSELoss().to(self.device)
         # loss as dataparallel
         if self.n_gpus > 1:
@@ -88,26 +90,27 @@ class Trainer():
 
     def train(self):
 
-        best_tp = 0.0
+        best_f1 = 0.0
 
         # train for n epochs
         for epoch in range(EPOCHS):
             # train for one epoch
-            loss, closs, rloss, tp, acc = self.train_epoch(train_loader=self.train_loader,
+            loss, closs, rloss, prec, rec, f1 = self.train_epoch(train_loader=self.train_loader,
                                             model=self.model,
                                             epoch=epoch)
             
             #print info
-            print(f"\nEpoch: [{epoch+1}/{EPOCHS}] Loss: {loss:.4f} | TP: {tp:.4f} | Acc: {acc:.4f}\n")
+            print(f"\nEpoch: [{epoch+1}/{EPOCHS}] Loss: {loss:.4f} | P: {prec:.4f} | R: {rec:.4f} | F1: {f1:.4f}\n")
 
-            if tp > best_tp:
-                best_tp = tp
+            if f1 > best_f1:
+                best_f1 = f1
                 # save model
                 if self.n_gpus > 1:
                     torch.save(self.model.module.state_dict(), self.logdir + '/best_train.pth')
                 else:
                     torch.save(self.model.state_dict(), self.logdir + '/best_train.pth')
-                print(f"Model saved at epoch {epoch} with tp {tp:.4f}")
+                print(f"Model saved at epoch {epoch+1} with f1 {f1:.4f}")
+                print('*'*50)
             
             # TODO: evaluate on validation set
                 
@@ -120,8 +123,9 @@ class Trainer():
         running_loss = AverageMeter()
         running_closs = AverageMeter()
         running_rloss = AverageMeter()
-        running_tp = AverageMeter()
-        running_acc = AverageMeter()
+        running_prec = AverageMeter()
+        running_rec = AverageMeter()
+        running_f1 = AverageMeter()
 
         # switch to train mode
         model.train()
@@ -163,22 +167,26 @@ class Trainer():
 
             # measure accuracy and record loss
             train_loss = train_loss.mean()
-            # candidate vertices accuracy (from TP)
-            tp = (preds == 1) & (class_labels == 1)
-            tp = tp.sum().float() / class_labels.sum().float()
-            acc = (preds == class_labels).sum().float() / preds.numel()
+            # metrics
+            tp = ((preds == 1) & (class_labels == 1)).sum().float()
+            fp = ((preds == 1) & (class_labels == 0)).sum().float()
+            fn = ((preds == 0) & (class_labels == 1)).sum().float()
+            # acc = (preds == class_labels).sum().float() / preds.numel()
+            precision = tp / (tp + fp + 1e-6)
+            recall = tp / (tp + fn + 1e-6)
+            f1 = 2 * precision * recall / (precision + recall + 1e-6)
 
             # update loss
             running_loss.update(train_loss.item(), pc.shape[0])
             running_closs.update(class_loss.item(), pc.shape[0])
             running_rloss.update(offset_loss.item(), pc.shape[0])
             # update tp = class 1 accuracy
-            running_tp.update(tp.item(), pc.shape[0])
-            running_acc.update(acc.item(), pc.shape[0])
+            running_prec.update(precision.item(), pc.shape[0])
+            running_rec.update(recall.item(), pc.shape[0])
+            running_f1.update(f1.item(), pc.shape[0])
 
             if i % 50 == 0:
-                print(f"Batch: [{i+1}/{len(train_loader)}] CE Loss: {running_closs.avg:.4f} | R Loss: {running_rloss.avg:.4f} | Total Loss: {running_loss.avg:.4f} | TP: {running_tp.avg:.4f} | Acc: {running_acc.avg:.4f}")
-                #print(f"Number of predicted vertices for last sample: {preds.sum()}/{class_labels.sum()}")
+                print(f"Batch: [{i+1}/{len(train_loader)}] CE Loss: {running_closs.avg:.4f} | R Loss: {running_rloss.avg:.4f} | Total Loss: {running_loss.avg:.4f} | P: {running_prec.avg:.4f} | R: {running_rec.avg:.4f} | F1: {running_f1.avg:.4f}")
 
             if i % 50 == 0 and SHOW_SAMPLE:
                 # plot the two point clouds with matplotlib
@@ -194,9 +202,9 @@ class Trainer():
             header = 'Train/'
             self.writer_train.add_scalar(header + 'CE Loss', class_loss, i + len(train_loader) * epoch)
             self.writer_train.add_scalar(header + 'R Loss', offset_loss, i + len(train_loader) * epoch)
-            self.writer_train.add_scalar(header + 'TP', tp, i + len(train_loader) * epoch)
-            self.writer_train.add_scalar(header + 'Acc', acc, i + len(train_loader) * epoch)
-            # self.writer_train.add_scalar(header + 'IoU', iou.avg, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'Precision', precision, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'Recall', recall, i + len(train_loader) * epoch)
+            self.writer_train.add_scalar(header + 'F1', f1, i + len(train_loader) * epoch)
             # self.writer_train.add_scalar(header + 'Learning Rate', scheduler.get_lr()[0], i + len(train_loader) * epoch)
 
-        return running_loss.avg, running_closs.avg, running_rloss.avg, running_tp.avg, running_acc.avg
+        return running_loss.avg, running_closs.avg, running_rloss.avg, running_prec.avg, running_rec.avg, running_f1.avg
