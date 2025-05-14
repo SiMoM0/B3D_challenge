@@ -19,6 +19,7 @@ from Building3D.datasets import build_dataset
 EPOCHS = 20
 BATCH_SIZE = 32
 HIDDEN_DIM = 128
+OPTIMIZER = 'adamw' # 'sgd'
 SHOW_SAMPLE = False
 ##########################
 
@@ -70,7 +71,7 @@ class Trainer():
             self.model.cuda()
 
         # loss
-        weights = torch.tensor([0.01, 0.99]).float()
+        weights = torch.tensor([0.1, 0.9]).float()
         self.ce_loss = nn.CrossEntropyLoss(weight=weights).to(self.device)
         #self.ce_loss = FocalLoss(alpha=weights, gamma=2).to(self.device)
         self.mse_loss = nn.MSELoss().to(self.device)
@@ -80,10 +81,18 @@ class Trainer():
             self.mse_loss = nn.DataParallel(self.mse_loss).cuda()
 
         # optimizer
-        self.optimizer = torch.optim.SGD(self.model.parameters(),
-                                         lr=1e-2,
-                                         momentum=0.9,
-                                         weight_decay=5e-4)
+        if OPTIMIZER == 'adamw':
+            self.optimizer = torch.optim.AdamW(self.model.parameters(),
+                                               lr=1e-3,
+                                               eps=1e-8,
+                                               weight_decay=0.01)
+        elif OPTIMIZER == 'sgd':
+            self.optimizer = torch.optim.SGD(self.model.parameters(),
+                                             lr=1e-2,
+                                             momentum=0.9,
+                                             weight_decay=5e-4)
+        else:
+            raise ValueError(f"Optimizer {OPTIMIZER} not supported. Use 'adamw' or 'sgd'.")
         
         # scheduler
         # self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.1)
@@ -185,10 +194,10 @@ class Trainer():
             running_rec.update(recall.item(), pc.shape[0])
             running_f1.update(f1.item(), pc.shape[0])
 
-            if i % 50 == 0:
+            if i % 100 == 0:
                 print(f"Batch: [{i+1}/{len(train_loader)}] CE Loss: {running_closs.avg:.4f} | R Loss: {running_rloss.avg:.4f} | Total Loss: {running_loss.avg:.4f} | P: {running_prec.avg:.4f} | R: {running_rec.avg:.4f} | F1: {running_f1.avg:.4f}")
 
-            if i % 50 == 0 and SHOW_SAMPLE:
+            if i % 100 == 0 and SHOW_SAMPLE:
                 # plot the two point clouds with matplotlib
                 colors = np.where(preds[0, :, None].cpu().numpy() == 0, [0, 0, 0], [1, 0, 0])
                 fig = plt.figure()

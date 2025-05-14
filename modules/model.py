@@ -67,7 +67,7 @@ class Embedding(nn.Module):
         return self.final(torch.cat((point_emb, neigh_emb), dim=1))
     
 class Modellone(nn.Module):
-    def __init__(self, channels_in, channels_out, big=True):
+    def __init__(self, channels_in, channels_out, big=False):
         super().__init__()
 
         self.big = big
