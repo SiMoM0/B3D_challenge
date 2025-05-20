@@ -18,6 +18,14 @@ python train.py --dataset /path/to/dataset/
 
 Example: `python train.py --dataset ./Building3D_entry_level/Entry-level/`
 
+Visualize predictions:
+
+```
+python visualize_predictions.py --dataset /path/to/dataset/ --predictions /path/to/predictions/ --split test --data dataset_type
+```
+
+Example: python visualize_predictions.py --dataset ~/Downloads/Tallinn/ --predictions ../Point2Roof/predictions_tallinn/ --split test --data tallinn
+
 ### References
 
 PC2WF: https://arxiv.org/pdf/2103.02766
