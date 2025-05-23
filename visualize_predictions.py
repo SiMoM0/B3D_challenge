@@ -173,7 +173,10 @@ def main(dataset_config, predictions_path, split='test', data='tallinn'):
             edge_visual = scene.visuals.Line(edges, connect='segments', color='white', width=POINT_SIZE)
             view2.add(edge_visual)
         # add predictions
-        markers2.set_data(pc, edge_color='white', face_color='white', size=POINT_SIZE)
+        new_pc = np.concatenate((pc, pred_vertices), axis=0)
+        new_colors = np.concatenate((colors, np.ones((len(pred_vertices), 3)) * [0.2, 0.2, 0.8]), axis=0)
+        sizes = np.concatenate((np.ones((len(pc))) * POINT_SIZE, np.ones((len(pred_vertices))) * (POINT_SIZE * 4)), axis=0)
+        markers2.set_data(new_pc, edge_color=new_colors, face_color=new_colors, size=sizes)
         #markers2.add_data(pred_vertices, edge_color='red', face_color='red', size=POINT_SIZE)
         edge_visual2 = scene.visuals.Line(pred_edges, connect='segments', color='red', width=POINT_SIZE+2)
         view2.add(edge_visual2)
