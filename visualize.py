@@ -42,6 +42,7 @@ def parse_args():
 
 def main(dataset_config):
     print('Building3D dataset config:', dataset_config)
+    dataset_config['Building3D']['num_points'] = None # TODO: use original point cloud (to be handled in the dataset class)
 
     # setup visualization
     # Create a canvas and add a view
@@ -130,12 +131,16 @@ def main(dataset_config):
             class_labels = class_labels.astype(bool)
             colors[class_labels] = [1, 0, 0]  # red
 
-        print(f'Point cloud {scan_idx} | size {len(pc)} | vertices {len(wf_vertices)} | candidates {class_labels.sum()}')
+            print(f'Point cloud {scan_idx.item():<6} | size {len(pc):<6} | vertices {len(wf_vertices):<6} | edges {len(edges)//2:<6} | candidates {class_labels.sum():<6}')
+        else:
+            print(f'Point cloud {scan_idx.item():<6} | size {len(pc):<6} | vertices {len(wf_vertices):<6} | edges {len(edges)//2:<6}')
+
 
         markers1.set_data(pc, edge_color=colors, face_color=colors, size=POINT_SIZE)
-        markers2.set_data(wf_vertices, edge_color='white', face_color='white', size=POINT_SIZE)
+        gt_color = 'black' if BGCOLOR == 'white' else 'white'
+        markers2.set_data(wf_vertices, edge_color=gt_color, face_color=gt_color, size=POINT_SIZE+2)
         # add edges to the second view
-        edge_visual = scene.visuals.Line(edges, connect='segments', color='white', width=POINT_SIZE)
+        edge_visual = scene.visuals.Line(edges, connect='segments', color=gt_color, width=POINT_SIZE)
         view2.add(edge_visual)
 
     # Function to handle key press events
