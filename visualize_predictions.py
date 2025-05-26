@@ -148,7 +148,8 @@ def main(dataset_config, predictions_path, split='test', data='tallinn'):
         # print(f'Predicted vertices: {pred_vertices}')
         # print(f'GT vertices: {wf_vertices}')
 
-        pred_edges = np.concatenate([[pred_vertices[i], pred_vertices[j]] for (i, j) in pred_edges], axis=0)
+        if len(pred_edges) != 0:
+            pred_edges = np.concatenate([[pred_vertices[i], pred_vertices[j]] for (i, j) in pred_edges], axis=0)
 
         # assert len(wf_edges) == len(edges), f"wf_edges: {len(wf_edges)}, edges: {len(edges)}"
 
@@ -162,9 +163,9 @@ def main(dataset_config, predictions_path, split='test', data='tallinn'):
             colors[class_labels] = [1, 0, 0]  # red
 
         if split == 'train':
-            print(f'Point cloud [{scan_idx}] | size {len(pc)} | gt vertices {len(wf_vertices)} | pred vertices {len(pred_vertices)}')
+            print(f'Point cloud [{scan_idx}]\t| size: {len(pc):<6}\t| gt vertices: {len(wf_vertices):<6}\t| pred vertices: {len(pred_vertices):<6} | gt edges: {len(wf_edges):<6} | pred edges: {len(pred_edges)//2:<6}')
         else:
-            print(f'Point cloud [{scan_idx}] | size {len(pc)} | pred vertices {len(pred_vertices)}')
+            print(f'Point cloud [{scan_idx}]\t| size: {len(pc):<6}\t| pred vertices: {len(pred_vertices):<6} | pred edges: {len(pred_edges)//2:<6}')
 
         markers1.set_data(pc, edge_color=colors, face_color=colors, size=POINT_SIZE)
         # add edges to the second view
@@ -177,9 +178,10 @@ def main(dataset_config, predictions_path, split='test', data='tallinn'):
         new_colors = np.concatenate((colors, np.ones((len(pred_vertices), 3)) * [0.2, 0.2, 0.8]), axis=0)
         sizes = np.concatenate((np.ones((len(pc))) * POINT_SIZE, np.ones((len(pred_vertices))) * (POINT_SIZE * 4)), axis=0)
         markers2.set_data(new_pc, edge_color=new_colors, face_color=new_colors, size=sizes)
-        #markers2.add_data(pred_vertices, edge_color='red', face_color='red', size=POINT_SIZE)
-        edge_visual2 = scene.visuals.Line(pred_edges, connect='segments', color='red', width=POINT_SIZE+2)
-        view2.add(edge_visual2)
+        # add predicted edges
+        if len(pred_edges) != 0:
+            edge_visual2 = scene.visuals.Line(pred_edges, connect='segments', color='red', width=POINT_SIZE+2)
+            view2.add(edge_visual2)
 
     # Function to handle key press events
     @canvas.events.key_press.connect
